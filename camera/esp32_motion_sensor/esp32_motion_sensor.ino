@@ -10,6 +10,10 @@
 #include <esp_wifi.h>
 #include <driver/rtc_io.h>
 
+// ESPNOW_PMK / ESPNOW_LMK - the shared encryption keys. Not in git: copy
+// secrets.example.h to secrets.h and use the same keys as the laser receiver.
+#include "secrets.h"
+
 // ---------------- Settings ----------------
 #define PIR_PIN GPIO_NUM_1  // PIR OUT wire. Must be an RTC GPIO (0-21) to wake from deep sleep
 
@@ -53,12 +57,15 @@ void sendEspNow(uint8_t type) {
 
   if (esp_now_init() != ESP_OK) return;
   esp_now_register_send_cb(onDataSent);
+  if (esp_now_set_pmk(ESPNOW_PMK) != ESP_OK) return;
 
+  // Encrypted: the receiver only accepts messages sealed with the shared key
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, RECEIVER_MAC, 6);
   peer.channel = ESPNOW_CHANNEL;
   peer.ifidx = WIFI_IF_STA;
-  peer.encrypt = false;
+  peer.encrypt = true;
+  memcpy(peer.lmk, ESPNOW_LMK, ESP_NOW_KEY_LEN);
   if (esp_now_add_peer(&peer) != ESP_OK) return;
 
   MotionMsg msg = {type, motionCount, bootCount};

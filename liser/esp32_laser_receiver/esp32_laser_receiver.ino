@@ -11,6 +11,10 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 
+// ESPNOW_PMK / ESPNOW_LMK - the shared encryption keys. Not in git: copy
+// secrets.example.h to secrets.h and use the same keys as the motion sensor.
+#include "secrets.h"
+
 // ---------------- Settings ----------------
 #define LASER_PIN 2
 #define SERVO_PIN 4
@@ -19,6 +23,12 @@
 const bool LASER_ACTIVE_LOW = true;
 
 const uint8_t ESPNOW_CHANNEL = 1;  // must match ESPNOW_CHANNEL in esp32_motion_sensor
+
+// MAC of the motion sensor - the only sender allowed to move the laser.
+// Get it by flashing esp32_print_mac on the sensor board (the "STA MAC" line).
+constexpr uint8_t SENSOR_MAC[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+static_assert((SENSOR_MAC[0] | SENSOR_MAC[1] | SENSOR_MAC[2] | SENSOR_MAC[3] | SENSOR_MAC[4] | SENSOR_MAC[5]) != 0,
+              "Set SENSOR_MAC to the motion sensor's MAC (flash esp32_print_mac on it)");
 
 // Safety: turn the laser off if "motion end" never arrives (e.g. the message was lost). 0 = never
 const unsigned long LASER_MAX_ON_MS = 10UL * 60 * 1000;
@@ -65,9 +75,15 @@ bool servoActive = false;
 // The receive callback signature changed in Arduino-ESP32 core 3.0.0
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  const uint8_t *mac = info->src_addr;
 #else
 void onDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
 #endif
+  // ESP-NOW still hands us unencrypted messages from senders we never added as
+  // peers, so the sender check is what keeps strangers away from the laser.
+  // The sensor itself is an encrypted peer: a message that claims its MAC
+  // without the key is dropped before it reaches this callback.
+  if (memcmp(mac, SENSOR_MAC, 6) != 0) return;
   if (len != sizeof(MotionMsg)) return;
   lastType = ((const MotionMsg *)data)->type;
   gotMsg = true;  // handled in loop(), not in the Wi-Fi task
@@ -128,6 +144,19 @@ void setup() {
   esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
   if (esp_now_init() != ESP_OK) return;
+  if (esp_now_set_pmk(ESPNOW_PMK) != ESP_OK) return;
+
+  // The sensor as an encrypted peer, so its messages are decrypted with the
+  // shared key. If any step fails we return before registering the callback,
+  // and the laser simply never turns on.
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, SENSOR_MAC, 6);
+  peer.channel = ESPNOW_CHANNEL;
+  peer.ifidx = WIFI_IF_STA;
+  peer.encrypt = true;
+  memcpy(peer.lmk, ESPNOW_LMK, ESP_NOW_KEY_LEN);
+  if (esp_now_add_peer(&peer) != ESP_OK) return;
+
   esp_now_register_recv_cb(onDataRecv);
 }
 
