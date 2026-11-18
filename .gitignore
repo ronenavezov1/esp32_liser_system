@@ -1,0 +1,16 @@
+# Arduino / PlatformIO build output
+build/
+.pio/
+*.bin
+*.elf
+
+# IDE
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Secrets: WiFi passwords, ESP-NOW keys
+secrets.h
